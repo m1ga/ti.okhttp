@@ -1,0 +1,18 @@
+#
+# this is your module manifest and used by Titanium
+# during compilation, packaging, distribution, etc.
+#
+version: 1.0.0
+apiversion: 4
+architectures: arm64-v8a armeabi-v7a x86 x86_64
+description: ti.okhttp
+author: Your Name
+license: Specify your license
+copyright: Copyright (c) 2024 by Your Company
+
+# these should not be edited
+name: ti.okhttp
+moduleid: ti.okhttp
+guid: c6f83543-3e2f-4c0f-8159-0a18ed7bd16e
+platform: android
+minsdk: 12.3.0.GA
