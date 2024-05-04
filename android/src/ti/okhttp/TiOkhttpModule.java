@@ -15,15 +15,20 @@ import org.appcelerator.kroll.annotations.Kroll;
 import org.appcelerator.kroll.common.Log;
 import org.appcelerator.kroll.common.TiConfig;
 import org.appcelerator.titanium.TiApplication;
+import org.appcelerator.titanium.TiC;
+import org.appcelerator.titanium.TiFileProxy;
 import org.appcelerator.titanium.util.TiConvert;
+import org.appcelerator.titanium.util.TiFileHelper;
 import org.appcelerator.titanium.util.TiPlatformHelper;
 
+import java.io.File;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import okhttp3.Cache;
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.Headers;
@@ -33,6 +38,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import ti.modules.titanium.filesystem.FilesystemModule;
 
 
 @Kroll.module(name = "TiOkhttp", id = "ti.okhttp")
@@ -87,6 +93,22 @@ public class TiOkhttpModule extends KrollModule {
         if (data.containsKeyAndNotNull("writeTimeout")) {
             clientBuilder.writeTimeout(data.getInt("writeTimeout"), TimeUnit.MILLISECONDS);
         }
+
+        if (data.containsKeyAndNotNull("caching") && data.getBoolean("caching")) {
+            int cacheSize = 10;
+            if (data.containsKeyAndNotNull("cacheSize")) {
+                cacheSize = data.getInt("cacheSize");
+            }
+            File file = TiApplication.getInstance().getTiTempDir().getAbsoluteFile();
+            if (file.exists()) {
+                try {
+                    clientBuilder.cache(CacheResponse(file, cacheSize));
+                } catch (Exception exception) {
+                    //
+                    Log.e(LCAT, "error: " + exception.getCause());
+                }
+            }
+        }
         return clientBuilder;
     }
 
@@ -121,6 +143,12 @@ public class TiOkhttpModule extends KrollModule {
         });
     }
 
+    private Cache CacheResponse(File cacheDirectory, int value) throws Exception {
+        int cacheSize = value * 1024 * 1024; // MiB
+        Cache cache = new Cache(cacheDirectory, cacheSize);
+        return cache;
+    }
+
     private void createErrorEvent(IOException e) {
         KrollDict kd = new KrollDict();
         if (e instanceof SocketTimeoutException) {
@@ -140,6 +168,18 @@ public class TiOkhttpModule extends KrollModule {
         } catch (Exception exception) {
             output.put("body", "");
         }
+        boolean isCached = false;
+        String networkResponse = "";
+
+        if (response != null && response.cacheResponse() != null) {
+            isCached = true;
+        }
+        if (response != null && response.networkResponse() != null) {
+            networkResponse = response.networkResponse().toString();
+        }
+
+        output.put("cached", isCached);
+        output.put("networkResponse", networkResponse);
         output.put("protocol", response.protocol().toString());
         fireEvent("data", output);
     }

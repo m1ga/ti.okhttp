@@ -17,8 +17,10 @@ All methods can use these parameters:
 * connectTimeout: int (milliseconds)
 * readTimeout: int (milliseconds)
 * writeTimeout: int (milliseconds)
+* caching: boolean
+* cacheSize: int (MB)
 
 ## Events
 
-* data: protocol, header, body
+* data: protocol, header, body, cached
 * error: timeout (bool), message (string)

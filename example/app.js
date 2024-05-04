@@ -17,18 +17,24 @@ const btn_ok3 = Ti.UI.createButton({
 const btn_ok4 = Ti.UI.createButton({
 	title: "okhttp timeout"
 });
+const btn_ok5 = Ti.UI.createButton({
+	title: "okhttp cache"
+});
 const btn1 = Ti.UI.createButton({
-	title: "default get"
+	title: "default get",
+	top: 20
 });
 const btn2 = Ti.UI.createButton({
 	title: "default post"
 });
-win.add([btn_ok1, btn_ok2, btn_ok3,btn_ok4, btn1, btn2]);
+win.add([btn_ok1, btn_ok2, btn_ok3, btn_ok4, btn_ok5, btn1, btn2]);
 win.open();
 
 okhttp.addEventListener("data", function(e) {
-	console.log(e.protocol);
-	console.log(e.body);
+	console.log("Protocol:", e.protocol);
+	console.log("cached:", e.cached);
+	// console.log("networkResponse:", e.networkResponse);
+	console.log("body:", JSON.stringify(e.body));
 })
 okhttp.addEventListener("error", function(e) {
 	console.log("error");
@@ -77,11 +83,20 @@ btn_ok4.addEventListener("click", function(e) {
 		url: URL_GET
 	})
 })
+btn_ok5.addEventListener("click", function(e) {
+	okhttp.get({
+		header: {
+			"Cache-Control": "max-stale=3600"
+		},
+		caching: true,
+		url: URL_GET
+	})
+})
 
 btn1.addEventListener("click", function(e) {
 	var client = Ti.Network.createHTTPClient({
 		onload: function(e) {
-			console.log(this.responseText);
+			console.log(JSON.stringify(this.responseText));
 		},
 		onerror: function(e) {},
 	});
@@ -94,7 +109,7 @@ btn1.addEventListener("click", function(e) {
 btn2.addEventListener("click", function(e) {
 	var client = Ti.Network.createHTTPClient({
 		onload: function(e) {
-			console.log(this.responseText);
+			console.log(JSON.stringify(this.responseText));
 		},
 		onerror: function(e) {},
 	});
