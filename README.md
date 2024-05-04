@@ -21,3 +21,4 @@ All methods can use these parameters:
 ## Events
 
 * data: protocol, header, body
+* error: timeout (bool), message (string)
