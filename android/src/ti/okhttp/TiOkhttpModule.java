@@ -7,6 +7,8 @@
  */
 package ti.okhttp;
 
+import android.os.Build;
+
 import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.kroll.KrollModule;
 import org.appcelerator.kroll.annotations.Kroll;
@@ -14,11 +16,13 @@ import org.appcelerator.kroll.common.Log;
 import org.appcelerator.kroll.common.TiConfig;
 import org.appcelerator.titanium.TiApplication;
 import org.appcelerator.titanium.util.TiConvert;
-import org.json.JSONObject;
+import org.appcelerator.titanium.util.TiPlatformHelper;
 
 import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -37,6 +41,10 @@ public class TiOkhttpModule extends KrollModule {
     // Standard Debugging variables
     private static final String LCAT = "TiOkhttpModule";
     private static final boolean DBG = TiConfig.LOGD;
+    private static final String TITANIUM_USER_AGENT =
+            "Titanium SDK/" + TiApplication.getInstance().getTiBuildVersion() + " (" + Build.MODEL
+                    + "; Android API Level: " + Build.VERSION.SDK_INT + "; "
+                    + TiPlatformHelper.getInstance().getLocale() + ";)";
     private final OkHttpClient client = new OkHttpClient();
 
     public TiOkhttpModule() {
@@ -47,41 +55,65 @@ public class TiOkhttpModule extends KrollModule {
     public static void onAppCreate(TiApplication app) {
     }
 
-    // Methods
-    @Kroll.method
-    public void get(KrollDict data) {
+
+    private Request parseRequest(@Kroll.argument(optional = true) KrollDict data, RequestBody body) {
         Request.Builder requestBuilder = new Request.Builder()
-                .header("User-Agent", "Titanium OkHttp")
+                .header("User-Agent", TITANIUM_USER_AGENT)
                 .url(data.getString("url"));
 
         if (data.containsKeyAndNotNull("header")) {
             Map<String, String> headerData = (HashMap) data.get("header");
             for (Map.Entry<String, String> item : headerData.entrySet()) {
+                requestBuilder.removeHeader(item.getKey());
                 requestBuilder.addHeader(item.getKey(), item.getValue());
             }
         }
 
-        Request request = requestBuilder.build();
+        if (body != null) {
+            requestBuilder.post(body);
+        }
 
-        client.newCall(request).enqueue(new Callback() {
+        return requestBuilder.build();
+    }
+
+    private OkHttpClient.Builder parseData(KrollDict data) {
+        OkHttpClient.Builder clientBuilder = client.newBuilder();
+        if (data.containsKeyAndNotNull("connectTimeout")) {
+            clientBuilder.connectTimeout(data.getInt("connectTimeout"), TimeUnit.MILLISECONDS);
+        }
+        if (data.containsKeyAndNotNull("readTimeout")) {
+            clientBuilder.readTimeout(data.getInt("readTimeout"), TimeUnit.MILLISECONDS);
+        }
+        if (data.containsKeyAndNotNull("writeTimeout")) {
+            clientBuilder.writeTimeout(data.getInt("writeTimeout"), TimeUnit.MILLISECONDS);
+        }
+        return clientBuilder;
+    }
+
+    // Methods
+    @Kroll.method
+    public void get(KrollDict data) {
+        if (!data.containsKeyAndNotNull("url")) {
+            Log.e(LCAT, "Please set an URL");
+            return;
+        }
+        OkHttpClient.Builder clientBuilder = parseData(data);
+        Request request = parseRequest(data, null);
+
+        clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.e(LCAT, e.toString());
+                createErrorEvent(e);
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
                 try (ResponseBody responseBody = response.body()) {
-                    if (!response.isSuccessful()) {
-                        Log.e(LCAT, response.toString());
+                    if (response.isSuccessful()) {
+                        createReturnEvent(response.headers(), response.body(), response);
+                    } else {
+                        fireEvent("error", new KrollDict());
                     }
-
-                    Headers responseHeaders = response.headers();
-                    KrollDict output = new KrollDict();
-                    output.put("header", responseHeaders.toString());
-                    output.put("body", responseBody.string());
-                    output.put("protocol", response.protocol().toString());
-                    fireEvent("data", output);
                 } catch (Exception exception) {
                     Log.e(LCAT, exception.toString());
                 }
@@ -89,8 +121,37 @@ public class TiOkhttpModule extends KrollModule {
         });
     }
 
+    private void createErrorEvent(IOException e) {
+        KrollDict kd = new KrollDict();
+        if (e instanceof SocketTimeoutException) {
+            kd.put("timeout", true);
+        } else {
+            kd.put("timeout", false);
+        }
+        kd.put("message", e.toString());
+        fireEvent("error", kd);
+    }
+
+    private void createReturnEvent(Headers header, ResponseBody body, Response response) {
+        KrollDict output = new KrollDict();
+        output.put("header", header.toString());
+        try {
+            output.put("body", body.string());
+        } catch (Exception exception) {
+            output.put("body", "");
+        }
+        output.put("protocol", response.protocol().toString());
+        fireEvent("data", output);
+    }
+
     @Kroll.method
     public void post(KrollDict data) {
+        if (!data.containsKeyAndNotNull("url")) {
+            Log.e(LCAT, "Please set an URL");
+            return;
+        }
+        OkHttpClient.Builder clientBuilder = parseData(data);
+
         MediaType JSON = MediaType.parse("application/json");
         String postBody = "";
         if (data.get("data") instanceof HashMap) {
@@ -99,40 +160,22 @@ public class TiOkhttpModule extends KrollModule {
             postBody = data.getString("data");
         }
 
-        Log.i(LCAT, postBody);
-        Request.Builder requestBuilder = new Request.Builder()
-                .header("User-Agent", "Titanium OkHttp")
-                .url(data.getString("url"));
-
-        if (data.containsKeyAndNotNull("header")) {
-            Map<String, String> headerData = (HashMap) data.get("header");
-            for (Map.Entry<String, String> item : headerData.entrySet()) {
-                if (item.getKey().equals("Content-Type")) {
-                    JSON = MediaType.parse(item.getValue());
-                }
-                requestBuilder.addHeader(item.getKey(), item.getValue());
-            }
-        }
-
         RequestBody body = RequestBody.create(postBody, JSON);
-        Request request = requestBuilder.url(data.getString("url"))
-                .post(body)
-                .build();
+        Request request = parseRequest(data, body);
 
-        client.newCall(request).enqueue(new Callback() {
+        clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(Call call, IOException e) {
-                Log.e(LCAT, e.toString());
+                createErrorEvent(e);
             }
 
             @Override
             public void onResponse(Call call, Response response) throws IOException {
-                Headers responseHeaders = response.headers();
-                KrollDict output = new KrollDict();
-                output.put("header", responseHeaders.toString());
-                output.put("body", response.body().string());
-                output.put("protocol", response.protocol().toString());
-                fireEvent("data", output);
+                if (response.isSuccessful()) {
+                    createReturnEvent(response.headers(), response.body(), response);
+                } else {
+                    fireEvent("error", new KrollDict());
+                }
             }
         });
     }

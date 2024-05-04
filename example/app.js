@@ -5,30 +5,37 @@ var URL_POST = "https://httpbin.org/post";
 const win = Ti.UI.createWindow({
 	layout: "vertical"
 });
-const btn1 = Ti.UI.createButton({
+const btn_ok1 = Ti.UI.createButton({
 	title: "okhttp get"
 });
-const btn2 = Ti.UI.createButton({
+const btn_ok2 = Ti.UI.createButton({
 	title: "okhttp post"
 });
-const btn3 = Ti.UI.createButton({
+const btn_ok3 = Ti.UI.createButton({
+	title: "okhttp custom agent"
+});
+const btn_ok4 = Ti.UI.createButton({
+	title: "okhttp timeout"
+});
+const btn1 = Ti.UI.createButton({
 	title: "default get"
 });
-const btn4 = Ti.UI.createButton({
+const btn2 = Ti.UI.createButton({
 	title: "default post"
 });
-const lbl = Ti.UI.createLabel({
-	text: "-"
-});
-win.add([btn1, btn2, btn3, btn4, lbl]);
+win.add([btn_ok1, btn_ok2, btn_ok3,btn_ok4, btn1, btn2]);
 win.open();
 
 okhttp.addEventListener("data", function(e) {
 	console.log(e.protocol);
 	console.log(e.body);
 })
+okhttp.addEventListener("error", function(e) {
+	console.log("error");
+	console.log(e)
+})
 
-btn1.addEventListener("click", function(e) {
+btn_ok1.addEventListener("click", function(e) {
 	okhttp.get({
 		header: {
 			"Accept": "application/json",
@@ -37,7 +44,7 @@ btn1.addEventListener("click", function(e) {
 	})
 })
 
-btn2.addEventListener("click", function(e) {
+btn_ok2.addEventListener("click", function(e) {
 	okhttp.post({
 		header: {
 			"Accept": "application/json",
@@ -50,8 +57,28 @@ btn2.addEventListener("click", function(e) {
 		url: URL_POST
 	})
 })
+btn_ok3.addEventListener("click", function(e) {
+	okhttp.get({
+		header: {
+			"Accept": "application/json",
+			"User-Agent": "custom agent",
+		},
+		url: URL_GET
+	})
+})
+btn_ok4.addEventListener("click", function(e) {
+	okhttp.get({
+		header: {
+			"Accept": "application/json",
+		},
+		connectTimeout: 101,
+		readTimeout: 102,
+		writeTimeout: 103,
+		url: URL_GET
+	})
+})
 
-btn3.addEventListener("click", function(e) {
+btn1.addEventListener("click", function(e) {
 	var client = Ti.Network.createHTTPClient({
 		onload: function(e) {
 			console.log(this.responseText);
@@ -64,7 +91,7 @@ btn3.addEventListener("click", function(e) {
 })
 
 
-btn4.addEventListener("click", function(e) {
+btn2.addEventListener("click", function(e) {
 	var client = Ti.Network.createHTTPClient({
 		onload: function(e) {
 			console.log(this.responseText);
