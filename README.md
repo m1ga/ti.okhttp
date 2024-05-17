@@ -22,5 +22,5 @@ All methods can use these parameters:
 
 ## Events
 
-* data: protocol, header, body, cached
+* data: protocol, header, body, cached, data, url
 * error: timeout (bool), message (string)
