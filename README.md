@@ -12,7 +12,7 @@ https://square.github.io/okhttp/
 All methods can use these parameters:
 
 * url: String (*required*)
-* data: JSON object
+* data: JSON object - can contain a TiBlob in a post
 * header: JSON object
 * connectTimeout: int (milliseconds)
 * readTimeout: int (milliseconds)

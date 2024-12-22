@@ -20,6 +20,9 @@ const btn_ok4 = Ti.UI.createButton({
 const btn_ok5 = Ti.UI.createButton({
 	title: "okhttp cache"
 });
+const btn_ok6 = Ti.UI.createButton({
+	title: "okhttp post file"
+});
 const btn1 = Ti.UI.createButton({
 	title: "default get",
 	top: 20
@@ -27,7 +30,7 @@ const btn1 = Ti.UI.createButton({
 const btn2 = Ti.UI.createButton({
 	title: "default post"
 });
-win.add([btn_ok1, btn_ok2, btn_ok3, btn_ok4, btn_ok5, btn1, btn2]);
+win.add([btn_ok1, btn_ok2, btn_ok3, btn_ok4, btn_ok5, btn_ok6, btn1, btn2]);
 win.open();
 
 okhttp.addEventListener("data", function(e) {
@@ -63,6 +66,25 @@ btn_ok2.addEventListener("click", function(e) {
 		url: URL_POST
 	})
 })
+
+btn_ok6.addEventListener("click", function(e) {
+	let file = Ti.Filesystem.getFile(Ti.Filesystem.resourcesDirectory, "assets/DefaultIcon.png");
+	if (file.exists) {
+		okhttp.post({
+			header: {
+				"Content-Type": "application/x-www-form-urlencoded"
+			},
+			data: {
+				"foo": "test",
+				"file": file.read()
+			},
+			url: URL_POST
+		})
+	} else {
+		console.log("not found")
+	}
+})
+
 btn_ok3.addEventListener("click", function(e) {
 	okhttp.get({
 		header: {

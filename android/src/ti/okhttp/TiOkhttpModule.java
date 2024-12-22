@@ -9,6 +9,8 @@ package ti.okhttp;
 
 import android.os.Build;
 
+import androidx.annotation.NonNull;
+
 import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.kroll.KrollFunction;
 import org.appcelerator.kroll.KrollModule;
@@ -16,10 +18,18 @@ import org.appcelerator.kroll.annotations.Kroll;
 import org.appcelerator.kroll.common.Log;
 import org.appcelerator.kroll.common.TiConfig;
 import org.appcelerator.titanium.TiApplication;
+import org.appcelerator.titanium.TiBlob;
+import org.appcelerator.titanium.TiFileProxy;
+import org.appcelerator.titanium.io.TiBaseFile;
+import org.appcelerator.titanium.io.TiResourceFile;
 import org.appcelerator.titanium.util.TiConvert;
+import org.appcelerator.titanium.util.TiMimeTypeHelper;
 import org.appcelerator.titanium.util.TiPlatformHelper;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.util.HashMap;
@@ -31,6 +41,7 @@ import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.Headers;
 import okhttp3.MediaType;
+import okhttp3.MultipartBody;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
@@ -44,12 +55,9 @@ public class TiOkhttpModule extends KrollModule {
     // Standard Debugging variables
     private static final String LCAT = "TiOkhttpModule";
     private static final boolean DBG = TiConfig.LOGD;
-    private static final String TITANIUM_USER_AGENT =
-            "Titanium SDK/" + TiApplication.getInstance().getTiBuildVersion() + " (" + Build.MODEL
-                    + "; Android API Level: " + Build.VERSION.SDK_INT + "; "
-                    + TiPlatformHelper.getInstance().getLocale() + ";)";
+    private static final String TITANIUM_USER_AGENT = "Titanium SDK/" + TiApplication.getInstance().getTiBuildVersion() + " (" + Build.MODEL + "; Android API Level: " + Build.VERSION.SDK_INT + "; " + TiPlatformHelper.getInstance().getLocale() + ";)";
     private final OkHttpClient client = new OkHttpClient();
-    private KrollFunction clbSucess;
+    private KrollFunction clbSuccess;
     private KrollFunction clbError;
 
     public TiOkhttpModule() {
@@ -62,9 +70,7 @@ public class TiOkhttpModule extends KrollModule {
 
 
     private Request parseRequest(@Kroll.argument(optional = true) KrollDict data, RequestBody body) {
-        Request.Builder requestBuilder = new Request.Builder()
-                .header("User-Agent", TITANIUM_USER_AGENT)
-                .url(data.getString("url"));
+        Request.Builder requestBuilder = new Request.Builder().header("User-Agent", TITANIUM_USER_AGENT).url(data.getString("url"));
 
         if (data.containsKeyAndNotNull("header")) {
             Map<String, String> headerData = (HashMap) data.get("header");
@@ -75,7 +81,7 @@ public class TiOkhttpModule extends KrollModule {
         }
 
         if (data.containsKeyAndNotNull("success")) {
-            clbSucess = (KrollFunction) data.get("success");
+            clbSuccess = (KrollFunction) data.get("success");
         }
         if (data.containsKeyAndNotNull("error")) {
             clbError = (KrollFunction) data.get("error");
@@ -114,6 +120,9 @@ public class TiOkhttpModule extends KrollModule {
                     Log.e(LCAT, "error: " + exception.getCause());
                 }
             }
+        } else {
+            // disable cache by default
+            clientBuilder.cache(null);
         }
         return clientBuilder;
     }
@@ -155,8 +164,7 @@ public class TiOkhttpModule extends KrollModule {
 
     private Cache CacheResponse(File cacheDirectory, int value) throws Exception {
         int cacheSize = value * 1024 * 1024; // MiB
-        Cache cache = new Cache(cacheDirectory, cacheSize);
-        return cache;
+        return new Cache(cacheDirectory, cacheSize);
     }
 
     private void createErrorEvent(IOException e) {
@@ -196,8 +204,8 @@ public class TiOkhttpModule extends KrollModule {
         output.put("networkResponse", networkResponse);
         output.put("protocol", response.protocol().toString());
 
-        if (clbSucess != null) {
-            clbSucess.callAsync(getKrollObject(), output);
+        if (clbSuccess != null) {
+            clbSuccess.callAsync(getKrollObject(), output);
         }
         fireEvent("data", output);
     }
@@ -210,25 +218,106 @@ public class TiOkhttpModule extends KrollModule {
         }
         OkHttpClient.Builder clientBuilder = parseData(data);
 
-        MediaType JSON = MediaType.parse("application/json");
         String postBody = "";
+        boolean isMultipart = false;
         if (data.get("data") instanceof HashMap) {
-            postBody = TiConvert.toJSON((HashMap<String, Object>) data.get("data")).toString();
+
+            HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
+            for (String key : localData.keySet()) {
+                Object value = localData.get(key);
+                if (value != null) {
+                    if (value instanceof TiFileProxy) {
+                        value = ((TiFileProxy) value).getBaseFile();
+                    }
+                    if (value instanceof TiBaseFile || value instanceof TiBlob) {
+                        isMultipart = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!isMultipart) {
+                postBody = TiConvert.toJSON(localData).toString();
+            }
         } else {
             postBody = data.getString("data");
         }
 
-        RequestBody body = RequestBody.create(postBody, JSON);
+        RequestBody body;
+        if (isMultipart) {
+            MultipartBody.Builder multipartBody = new MultipartBody.Builder();
+            multipartBody.setType(MultipartBody.FORM);
+            HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
+            for (String key : localData.keySet()) {
+                Object value = localData.get(key);
+
+                if (value != null) {
+
+                    if (value instanceof TiFileProxy) {
+                        value = ((TiFileProxy) value).getBaseFile();
+                    }
+
+                    if (value instanceof TiBaseFile || value instanceof TiBlob) {
+                        File file = null;
+                        if (value instanceof TiBaseFile && !(value instanceof TiResourceFile)) {
+                            TiBaseFile baseFile = (TiBaseFile) value;
+                            file = baseFile.getNativeFile();
+                        } else if (value instanceof TiBlob || value instanceof TiResourceFile) {
+                            TiBlob blob;
+                            if (value instanceof TiBlob) {
+                                blob = (TiBlob) value;
+                            } else {
+                                try {
+                                    blob = ((TiResourceFile) value).read();
+                                } catch (IOException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            }
+                            String mimeType = blob.getMimeType();
+                            try {
+                                file = File.createTempFile(
+                                        "tixhr",
+                                        "." + TiMimeTypeHelper.getFileExtensionFromMimeType(mimeType, "txt"),
+                                        TiApplication.getInstance().getTiTempDir());
+                            } catch (IOException ignored) {
+                            }
+                            try {
+                                createFileFromBlob(blob, file);
+                            } catch (IOException ignored) {
+                            }
+                        }
+
+                        if (file != null) {
+                            multipartBody.addFormDataPart(key, file.getName(),
+                                    RequestBody.create(file,
+                                            MediaType.parse(TiMimeTypeHelper.getMimeType(file.getAbsolutePath()))
+                                    ));
+                        } else {
+                            Log.e(LCAT, "Error adding file");
+                        }
+                        break;
+                    }
+
+                    // normal key/value
+                    String str = TiConvert.toString(value);
+                    multipartBody.addFormDataPart(key, str);
+                }
+            }
+            body = multipartBody.build();
+        } else {
+            MediaType JSON = MediaType.parse("application/json");
+            body = RequestBody.create(postBody, JSON);
+        }
         Request request = parseRequest(data, body);
 
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
-            public void onFailure(Call call, IOException e) {
+            public void onFailure(@NonNull Call call, IOException e) {
                 createErrorEvent(e);
             }
 
             @Override
-            public void onResponse(Call call, Response response) throws IOException {
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 if (response.isSuccessful()) {
                     createReturnEvent(response.headers(), response.body(), response, data);
                 } else {
@@ -239,5 +328,20 @@ public class TiOkhttpModule extends KrollModule {
                 }
             }
         });
+    }
+
+    private void createFileFromBlob(TiBlob blob, File file) throws IOException {
+        BufferedInputStream bufferedInput = new BufferedInputStream(blob.getInputStream());
+        BufferedOutputStream bufferedOutput = new BufferedOutputStream(new FileOutputStream(file));
+
+        byte[] buffer = new byte[1024 * 1024 * 8]; // 8MB buffer
+        int available = -1;
+        while ((available = bufferedInput.read(buffer)) > 0) {
+            bufferedOutput.write(buffer, 0, available);
+        }
+
+        bufferedOutput.flush();
+        bufferedOutput.close();
+        bufferedInput.close();
     }
 }
