@@ -140,15 +140,15 @@ public class TiOkhttpModule extends KrollModule {
         Log.d(LCAT, "HTTP request to: " + data.getString("url"));
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
-            public void onFailure(Call call, IOException e) {
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 createErrorEvent(e);
             }
 
             @Override
-            public void onResponse(Call call, Response response) throws IOException {
+            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 try (ResponseBody responseBody = response.body()) {
                     if (response.isSuccessful()) {
-                        createReturnEvent(response.headers(), response.body(), response, data);
+                        createReturnEvent(response.headers(), responseBody, response, data);
                     } else {
                         if (clbError != null) {
                             clbError.callAsync(getKrollObject(), new KrollDict());
@@ -202,6 +202,7 @@ public class TiOkhttpModule extends KrollModule {
         output.put("data", data.getKrollDict("data"));
         output.put("cached", isCached);
         output.put("networkResponse", networkResponse);
+        assert response != null;
         output.put("protocol", response.protocol().toString());
 
         if (clbSuccess != null) {
@@ -223,6 +224,7 @@ public class TiOkhttpModule extends KrollModule {
         if (data.get("data") instanceof HashMap) {
 
             HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
+            assert localData != null;
             for (String key : localData.keySet()) {
                 Object value = localData.get(key);
                 if (value != null) {
@@ -248,6 +250,7 @@ public class TiOkhttpModule extends KrollModule {
             MultipartBody.Builder multipartBody = new MultipartBody.Builder();
             multipartBody.setType(MultipartBody.FORM);
             HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
+            assert localData != null;
             for (String key : localData.keySet()) {
                 Object value = localData.get(key);
 
@@ -259,8 +262,7 @@ public class TiOkhttpModule extends KrollModule {
 
                     if (value instanceof TiBaseFile || value instanceof TiBlob) {
                         File file = null;
-                        if (value instanceof TiBaseFile && !(value instanceof TiResourceFile)) {
-                            TiBaseFile baseFile = (TiBaseFile) value;
+                        if (value instanceof TiBaseFile baseFile && !(value instanceof TiResourceFile)) {
                             file = baseFile.getNativeFile();
                         } else if (value instanceof TiBlob || value instanceof TiResourceFile) {
                             TiBlob blob;
@@ -312,7 +314,7 @@ public class TiOkhttpModule extends KrollModule {
 
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
-            public void onFailure(@NonNull Call call, IOException e) {
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
                 createErrorEvent(e);
             }
 
