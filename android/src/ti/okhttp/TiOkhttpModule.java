@@ -57,8 +57,6 @@ public class TiOkhttpModule extends KrollModule {
     private static final boolean DBG = TiConfig.LOGD;
     private static final String TITANIUM_USER_AGENT = "Titanium SDK/" + TiApplication.getInstance().getTiBuildVersion() + " (" + Build.MODEL + "; Android API Level: " + Build.VERSION.SDK_INT + "; " + TiPlatformHelper.getInstance().getLocale() + ";)";
     private final OkHttpClient client = new OkHttpClient();
-    private KrollFunction clbSuccess;
-    private KrollFunction clbError;
 
     public TiOkhttpModule() {
         super();
@@ -80,18 +78,21 @@ public class TiOkhttpModule extends KrollModule {
             }
         }
 
+        KrollFunction clbSuccess = null;
+        KrollFunction clbError = null;
         if (data.containsKeyAndNotNull("success")) {
             clbSuccess = (KrollFunction) data.get("success");
         }
         if (data.containsKeyAndNotNull("error")) {
             clbError = (KrollFunction) data.get("error");
         }
+        RequestContext ctx = new RequestContext(clbSuccess, clbError);
 
         if (body != null) {
             requestBuilder.post(body);
         }
 
-        return requestBuilder.build();
+        return requestBuilder.tag(ctx).build();
     }
 
     private OkHttpClient.Builder parseData(KrollDict data) {
@@ -141,17 +142,18 @@ public class TiOkhttpModule extends KrollModule {
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                createErrorEvent(e);
+                createErrorEvent(call, e);
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 try (ResponseBody responseBody = response.body()) {
                     if (response.isSuccessful()) {
-                        createReturnEvent(response.headers(), responseBody, response, data);
+                        createReturnEvent(call, response.headers(), responseBody, response, data);
                     } else {
-                        if (clbError != null) {
-                            clbError.callAsync(getKrollObject(), new KrollDict());
+                        RequestContext ctx = (RequestContext) call.request().tag();
+                        if (ctx != null && ctx.error != null) {
+                            ctx.error.callAsync(getKrollObject(), new KrollDict());
                         }
                         fireEvent("error", new KrollDict());
                     }
@@ -167,7 +169,7 @@ public class TiOkhttpModule extends KrollModule {
         return new Cache(cacheDirectory, cacheSize);
     }
 
-    private void createErrorEvent(IOException e) {
+    private void createErrorEvent(Call call, IOException e) {
         KrollDict kd = new KrollDict();
         if (e instanceof SocketTimeoutException) {
             kd.put("timeout", true);
@@ -176,12 +178,14 @@ public class TiOkhttpModule extends KrollModule {
         }
         kd.put("message", e.toString());
         fireEvent("error", kd);
-        if (clbError != null) {
-            clbError.callAsync(getKrollObject(), kd);
+
+        RequestContext ctx = (RequestContext) call.request().tag();
+        if (ctx != null && ctx.error != null) {
+            ctx.error.callAsync(getKrollObject(), kd);
         }
     }
 
-    private void createReturnEvent(Headers header, ResponseBody body, Response response, KrollDict data) {
+    private void createReturnEvent(Call call, Headers header, ResponseBody body, Response response, KrollDict data) {
         KrollDict output = new KrollDict();
         output.put("header", header.toString());
         try {
@@ -205,8 +209,9 @@ public class TiOkhttpModule extends KrollModule {
         assert response != null;
         output.put("protocol", response.protocol().toString());
 
-        if (clbSuccess != null) {
-            clbSuccess.callAsync(getKrollObject(), output);
+        RequestContext ctx = (RequestContext) call.request().tag();
+        if (ctx != null && ctx.success != null) {
+            ctx.success.callAsync(getKrollObject(), output);
         }
         fireEvent("data", output);
     }
@@ -315,16 +320,17 @@ public class TiOkhttpModule extends KrollModule {
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                createErrorEvent(e);
+                createErrorEvent(call, e);
             }
 
             @Override
             public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
                 if (response.isSuccessful()) {
-                    createReturnEvent(response.headers(), response.body(), response, data);
+                    createReturnEvent(call, response.headers(), response.body(), response, data);
                 } else {
-                    if (clbError != null) {
-                        clbError.callAsync(getKrollObject(), new KrollDict());
+                    RequestContext ctx = (RequestContext) call.request().tag();
+                    if (ctx != null && ctx.error != null) {
+                        ctx.error.callAsync(getKrollObject(), new KrollDict());
                     }
                     fireEvent("error", new KrollDict());
                 }
