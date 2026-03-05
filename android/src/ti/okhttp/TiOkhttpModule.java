@@ -330,7 +330,11 @@ public class TiOkhttpModule extends KrollModule {
                 } else {
                     RequestContext ctx = (RequestContext) call.request().tag();
                     if (ctx != null && ctx.error != null) {
-                        ctx.error.callAsync(getKrollObject(), new KrollDict());
+                        KrollDict kd = new KrollDict();
+                        kd.put("url", data.getString("url"));
+                        kd.put("data", data.getKrollDict("data"));
+                        kd.put("body", response.body().string());
+                        ctx.error.callAsync(getKrollObject(), kd);
                     }
                     fireEvent("error", new KrollDict());
                 }
