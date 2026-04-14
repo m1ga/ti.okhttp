@@ -6,7 +6,7 @@ A modern Android module for Titanium SDK that provides access to the powerful Ok
 
 ## Features
 
-- ✅ HTTP GET and POST requests
+- ✅ HTTP GET, POST and DELETE requests
 - ✅ Connection pooling for performance optimization
 - ✅ Request/response caching
 - ✅ File uploads with multipart support
@@ -58,6 +58,13 @@ Performs an HTTP GET request.
 #### `post(options)`
 
 Performs an HTTP POST request.
+
+**Parameters:**
+- `options` (Object) - Request options (see below)
+
+#### `deleteRoute(options)`
+
+Performs an HTTP DELETE request.
 
 **Parameters:**
 - `options` (Object) - Request options (see below)
