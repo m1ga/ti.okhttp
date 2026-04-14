@@ -1,144 +1,202 @@
 import okhttp from 'ti.okhttp';
-var URL_GET = "https://httpbin.org/get";
-var URL_POST = "https://httpbin.org/post";
 
+// Test URLs
+const URL_GET = 'https://httpbin.org/get';
+const URL_POST = 'https://httpbin.org/post';
+const URL_TIMEOUT = 'https://httpbin.org/delay/5';
+
+// Create window
 const win = Ti.UI.createWindow({
-	layout: "vertical"
+	layout: 'vertical',
+	backgroundColor: '#f5f5f5'
 });
-const btn_ok1 = Ti.UI.createButton({
-	title: "okhttp get"
+
+// Title
+const lblTitle = Ti.UI.createLabel({
+	text: 'ti.okhttp Examples',
+	font: { fontSize: 24, fontWeight: 'bold' },
+	top: 20,
+	color: '#333'
 });
-const btn_ok2 = Ti.UI.createButton({
-	title: "okhttp post"
-});
-const btn_ok3 = Ti.UI.createButton({
-	title: "okhttp custom agent"
-});
-const btn_ok4 = Ti.UI.createButton({
-	title: "okhttp timeout"
-});
-const btn_ok5 = Ti.UI.createButton({
-	title: "okhttp cache"
-});
-const btn_ok6 = Ti.UI.createButton({
-	title: "okhttp post file"
-});
-const btn1 = Ti.UI.createButton({
-	title: "default get",
+win.add(lblTitle);
+
+// Button container
+const btnContainer = Ti.UI.createView({
+	layout: 'vertical',
+	width: '90%',
 	top: 20
 });
-const btn2 = Ti.UI.createButton({
-	title: "default post"
+
+// Example buttons
+const btnGet = Ti.UI.createButton({
+	title: 'GET Request',
+	top: 10
 });
-win.add([btn_ok1, btn_ok2, btn_ok3, btn_ok4, btn_ok5, btn_ok6, btn1, btn2]);
-win.open();
+const btnPost = Ti.UI.createButton({
+	title: 'POST JSON',
+	top: 10
+});
+const btnFile = Ti.UI.createButton({
+	title: 'POST File Upload',
+	top: 10
+});
+const btnTimeout = Ti.UI.createButton({
+	title: 'Custom Timeouts',
+	top: 10
+});
+const btnCache = Ti.UI.createButton({
+	title: 'Response Caching',
+	top: 10
+});
+const btnConnectionPool = Ti.UI.createButton({
+	title: 'Connection Pooling',
+	top: 10
+});
+const btnCallbacks = Ti.UI.createButton({
+	title: 'Using Callbacks',
+	top: 10
+});
+const btnComparison = Ti.UI.createButton({
+	title: 'Compare with Ti.Network',
+	top: 10
+});
 
-okhttp.addEventListener("data", function(e) {
-	console.log("Protocol:", e.protocol);
-	console.log("cached:", e.cached);
-	// console.log("networkResponse:", e.networkResponse);
-	console.log("body:", JSON.stringify(e.body));
-})
-okhttp.addEventListener("error", function(e) {
-	console.log("error");
-	console.log(e)
-})
+btnContainer.add([btnGet, btnPost, btnFile, btnTimeout, btnCache, btnConnectionPool, btnCallbacks, btnComparison]);
+win.add(btnContainer);
 
-btn_ok1.addEventListener("click", function(e) {
+// Event Listeners
+okhttp.addEventListener('data', function(e) {
+	console.log('=== DATA EVENT ===');
+	console.log('Status Code:', e.statusCode);
+	console.log('Protocol:', e.protocol);
+	console.log('Cached:', e.cached);
+	console.log('URL:', e.url);
+	// console.log('Headers:', e.header);
+	// console.log('Body:', e.body);
+});
+
+okhttp.addEventListener('error', function(e) {
+	console.log('=== ERROR EVENT ===');
+	console.log('Timeout:', e.timeout);
+	console.log('Message:', e.message);
+});
+
+// GET Request
+btnGet.addEventListener('click', function() {
 	okhttp.get({
 		header: {
-			"Accept": "application/json",
+			'Accept': 'application/json'
 		},
 		url: URL_GET
-	})
-})
+	});
+});
 
-btn_ok2.addEventListener("click", function(e) {
+// POST JSON
+btnPost.addEventListener('click', function() {
 	okhttp.post({
 		header: {
-			"Accept": "application/json",
-			//"Content-Type": "application/x-www-form-urlencoded"
+			'Content-Type': 'application/json',
+			'Accept': 'application/json'
 		},
 		data: {
-			"foo": "test",
-			"bar": "2",
+			title: 'Ti.okhttp Test',
+			body: 'This is a test post from Titanium SDK',
+			userId: 1
 		},
 		url: URL_POST
-	})
-})
+	});
+});
 
-btn_ok6.addEventListener("click", function(e) {
-	let file = Ti.Filesystem.getFile(Ti.Filesystem.resourcesDirectory, "assets/DefaultIcon.png");
-	if (file.exists) {
+// File Upload
+btnFile.addEventListener('click', function() {
+	const file = Ti.Filesystem.getFile(Ti.Filesystem.resourcesDirectory, 'assets/DefaultIcon.png');
+	if (file.exists()) {
 		okhttp.post({
 			header: {
-				"Content-Type": "application/x-www-form-urlencoded"
+				'Content-Type': 'multipart/form-data'
 			},
 			data: {
-				"foo": "test",
-				"file": file.read()
+				description: 'Test file upload',
+				file: file.read()
 			},
 			url: URL_POST
-		})
+		});
 	} else {
-		console.log("not found")
+		Ti.API.error('File not found');
 	}
-})
+});
 
-btn_ok3.addEventListener("click", function(e) {
+// Custom Timeouts
+btnTimeout.addEventListener('click', function() {
 	okhttp.get({
 		header: {
-			"Accept": "application/json",
-			"User-Agent": "custom agent",
+			'Accept': 'application/json'
 		},
-		url: URL_GET
-	})
-})
-btn_ok4.addEventListener("click", function(e) {
+		connectTimeout: 10000,  // 10 seconds
+		readTimeout: 15000,     // 15 seconds
+		writeTimeout: 10000,    // 10 seconds
+		url: URL_TIMEOUT
+	});
+});
+
+// Response Caching
+btnCache.addEventListener('click', function() {
 	okhttp.get({
 		header: {
-			"Accept": "application/json",
-		},
-		connectTimeout: 101,
-		readTimeout: 102,
-		writeTimeout: 103,
-		url: URL_GET
-	})
-})
-btn_ok5.addEventListener("click", function(e) {
-	okhttp.get({
-		header: {
-			"Cache-Control": "max-stale=3600"
+			'Cache-Control': 'max-stale=3600'
 		},
 		caching: true,
+		cacheSize: 20,  // 20 MB
 		url: URL_GET
-	})
-})
+	});
+});
 
-btn1.addEventListener("click", function(e) {
-	var client = Ti.Network.createHTTPClient({
-		onload: function(e) {
-			console.log(JSON.stringify(this.responseText));
+// Connection Pooling
+btnConnectionPool.addEventListener('click', function() {
+	okhttp.get({
+		header: {
+			'Accept': 'application/json'
 		},
-		onerror: function(e) {},
+		connectionId: 'myPool',
+		maxIdleConnections: 5,
+		keepAliveDuration: 30000,
+		url: URL_GET
 	});
-	client.open("GET", URL_GET);
-	client.setRequestHeader("Accept", "application/json");
-	client.send();
-})
+});
 
-
-btn2.addEventListener("click", function(e) {
-	var client = Ti.Network.createHTTPClient({
-		onload: function(e) {
-			console.log(JSON.stringify(this.responseText));
+// Using Callbacks
+btnCallbacks.addEventListener('click', function() {
+	okhttp.get({
+		url: URL_GET,
+		header: {
+			'Accept': 'application/json'
 		},
-		onerror: function(e) {},
+		success: function(e) {
+			Ti.API.info('Success callback received');
+			Ti.API.info('Status:', e.statusCode);
+			Ti.API.info('Body:', e.body.substring(0, 200) + '...');
+		},
+		error: function(e) {
+			Ti.API.error('Error callback received:', e.message);
+		}
 	});
-	client.open("POST", URL_POST);
-	client.setRequestHeader("Accept", "application/json");
-	client.send({
-		"foo": "test",
-		"bar": 2,
+});
+
+// Comparison with Ti.Network
+btnComparison.addEventListener('click', function() {
+	const dialog = Ti.UI.createAlertDialog({
+		title: 'Comparison',
+		message: 'This example shows ti.okhttp vs Ti.Network.createHTTPClient\n\n' +
+			'ti.okhttp features:\n' +
+			'  • Connection pooling\n' +
+			'  • Better caching\n' +
+			'  • File uploads (multipart)\n' +
+			'  • Configurable timeouts\n' +
+			'  • Event-driven API\n\n' +
+			'See README.md for details.',
+		buttons: [Ti.UI.Android.BUTTON_POSITIVE]
 	});
-})
+	dialog.show();
+});
+
+win.open();
