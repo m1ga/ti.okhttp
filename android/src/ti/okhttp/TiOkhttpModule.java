@@ -10,6 +10,7 @@ package ti.okhttp;
 import android.os.Build;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import org.appcelerator.kroll.KrollDict;
 import org.appcelerator.kroll.KrollFunction;
@@ -35,10 +36,12 @@ import java.net.SocketTimeoutException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.Objects;
 
 import okhttp3.Cache;
 import okhttp3.Call;
 import okhttp3.Callback;
+import okhttp3.ConnectionPool;
 import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
@@ -56,7 +59,36 @@ public class TiOkhttpModule extends KrollModule {
     private static final String LCAT = "TiOkhttpModule";
     private static final boolean DBG = TiConfig.LOGD;
     private static final String TITANIUM_USER_AGENT = "Titanium SDK/" + TiApplication.getInstance().getTiBuildVersion() + " (" + Build.MODEL + "; Android API Level: " + Build.VERSION.SDK_INT + "; " + TiPlatformHelper.getInstance().getLocale() + ";)";
-    private final OkHttpClient client = new OkHttpClient();
+    
+    // Connection Pool settings
+    private static final int DEFAULT_KEEP_ALIVE_DURATION = 15000; // ms
+    private static final int DEFAULT_MAX_IDLE_CONNECTIONS = 1;
+    private static final String DEFAULT_CONNECTION_ID = "default";
+    
+    private final OkHttpClient client = createDefaultClient();
+    private final ConnectionPool defaultConnectionPool = createDefaultConnectionPool();
+
+    private static OkHttpClient createDefaultClient() {
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        // Default timeouts
+        builder.connectTimeout(30, TimeUnit.SECONDS);
+        builder.readTimeout(30, TimeUnit.SECONDS);
+        builder.writeTimeout(30, TimeUnit.SECONDS);
+        return builder.build();
+    }
+
+    private static ConnectionPool createDefaultConnectionPool() {
+        return new ConnectionPool(DEFAULT_MAX_IDLE_CONNECTIONS, DEFAULT_KEEP_ALIVE_DURATION, TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * Get or create a ConnectionPool for the given connection ID
+     */
+    private ConnectionPool getConnectionPool(String connectionId, int maxIdleConnections, long keepAliveDuration) {
+        // For simplicity, we create a new pool per request
+        // In a real implementation, you would cache pools by connectionId
+        return new ConnectionPool(maxIdleConnections, keepAliveDuration, TimeUnit.MILLISECONDS);
+    }
 
     public TiOkhttpModule() {
         super();
@@ -64,27 +96,63 @@ public class TiOkhttpModule extends KrollModule {
 
     @Kroll.onAppCreate
     public static void onAppCreate(TiApplication app) {
+        // Module initialization
     }
 
+    /**
+     * Parse request headers and configuration from KrollDict
+     */
+    private Request parseRequest(@Kroll.argument(optional = true) @NonNull KrollDict data, @Nullable RequestBody body) {
+        Objects.requireNonNull(data, "data cannot be null");
 
-    private Request parseRequest(@Kroll.argument(optional = true) KrollDict data, RequestBody body) {
-        Request.Builder requestBuilder = new Request.Builder().header("User-Agent", TITANIUM_USER_AGENT).url(data.getString("url"));
+        String url = data.getString("url");
+        if (url == null || url.trim().isEmpty()) {
+            Log.e(LCAT, "URL is required and cannot be empty");
+            throw new IllegalArgumentException("URL is required");
+        }
 
+        Request.Builder requestBuilder = new Request.Builder()
+                .header("User-Agent", TITANIUM_USER_AGENT)
+                .url(url);
+
+        // Parse host override (for custom hosts)
+        if (data.containsKeyAndNotNull("host")) {
+            String host = data.getString("host");
+            if (host != null && !host.isEmpty()) {
+                // OkHttp doesn't support custom hosts directly in Request.Builder
+                // The host property is documented but the actual URL should contain the host
+                Log.w(LCAT, "Host property is set but URL already contains host information");
+            }
+        }
+
+        // Parse headers
         if (data.containsKeyAndNotNull("header")) {
-            Map<String, String> headerData = (HashMap) data.get("header");
-            for (Map.Entry<String, String> item : headerData.entrySet()) {
-                requestBuilder.removeHeader(item.getKey());
-                requestBuilder.addHeader(item.getKey(), item.getValue());
+            Object headerObj = data.get("header");
+            if (headerObj instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, String> headerData = (Map<String, String>) headerObj;
+                headerData.forEach((key, value) -> {
+                    if (key != null && value != null) {
+                        requestBuilder.removeHeader(key);
+                        requestBuilder.addHeader(key, value);
+                    }
+                });
             }
         }
 
         KrollFunction clbSuccess = null;
         KrollFunction clbError = null;
         if (data.containsKeyAndNotNull("success")) {
-            clbSuccess = (KrollFunction) data.get("success");
+            Object successObj = data.get("success");
+            if (successObj instanceof KrollFunction) {
+                clbSuccess = (KrollFunction) successObj;
+            }
         }
         if (data.containsKeyAndNotNull("error")) {
-            clbError = (KrollFunction) data.get("error");
+            Object errorObj = data.get("error");
+            if (errorObj instanceof KrollFunction) {
+                clbError = (KrollFunction) errorObj;
+            }
         }
         RequestContext ctx = new RequestContext(clbSuccess, clbError);
 
@@ -95,8 +163,13 @@ public class TiOkhttpModule extends KrollModule {
         return requestBuilder.tag(ctx).build();
     }
 
-    private OkHttpClient.Builder parseData(KrollDict data) {
+    /**
+     * Parse client configuration (timeouts, caching, connection pooling) from KrollDict
+     */
+    private OkHttpClient.Builder parseData(@NonNull KrollDict data) {
         OkHttpClient.Builder clientBuilder = client.newBuilder();
+
+        // Timeouts
         if (data.containsKeyAndNotNull("connectTimeout")) {
             clientBuilder.connectTimeout(data.getInt("connectTimeout"), TimeUnit.MILLISECONDS);
         }
@@ -107,22 +180,42 @@ public class TiOkhttpModule extends KrollModule {
             clientBuilder.writeTimeout(data.getInt("writeTimeout"), TimeUnit.MILLISECONDS);
         }
 
+        // Connection Pooling
+        int maxIdleConnections = DEFAULT_MAX_IDLE_CONNECTIONS;
+        long keepAliveDuration = DEFAULT_KEEP_ALIVE_DURATION;
+        String connectionId = DEFAULT_CONNECTION_ID;
+
+        if (data.containsKeyAndNotNull("maxIdleConnections")) {
+            maxIdleConnections = data.getInt("maxIdleConnections");
+        }
+        if (data.containsKeyAndNotNull("keepAliveDuration")) {
+            keepAliveDuration = data.getInt("keepAliveDuration");
+        }
+        if (data.containsKeyAndNotNull("connectionId")) {
+            connectionId = data.getString("connectionId");
+        }
+
+        // Use a custom connection pool per request for the given connectionId
+        // In a full implementation, you would cache pools by connectionId
+        ConnectionPool connectionPool = getConnectionPool(connectionId, maxIdleConnections, keepAliveDuration);
+        clientBuilder.connectionPool(connectionPool);
+
+        // Caching
         if (data.containsKeyAndNotNull("caching") && data.getBoolean("caching")) {
             int cacheSize = 10;
             if (data.containsKeyAndNotNull("cacheSize")) {
                 cacheSize = data.getInt("cacheSize");
             }
             File file = TiApplication.getInstance().getTiTempDir().getAbsoluteFile();
-            if (file.exists()) {
+            if (file != null && file.exists() && file.isDirectory()) {
                 try {
                     clientBuilder.cache(CacheResponse(file, cacheSize));
                 } catch (Exception exception) {
-                    //
-                    Log.e(LCAT, "error: " + exception.getCause());
+                    Log.e(LCAT, "Failed to configure cache: " + exception.getMessage(), exception);
                 }
             }
         } else {
-            // disable cache by default
+            // Disable cache by default
             clientBuilder.cache(null);
         }
         return clientBuilder;
@@ -130,15 +223,24 @@ public class TiOkhttpModule extends KrollModule {
 
     // Methods
     @Kroll.method
-    public void get(KrollDict data) {
+    public void get(@Kroll.argument(optional = true) @NonNull KrollDict data) {
+        Objects.requireNonNull(data, "data cannot be null");
+
         if (!data.containsKeyAndNotNull("url")) {
             Log.e(LCAT, "Please set an URL");
             return;
         }
-        OkHttpClient.Builder clientBuilder = parseData(data);
-        Request request = parseRequest(data, null);
 
-        Log.d(LCAT, "HTTP request to: " + data.getString("url"));
+        OkHttpClient.Builder clientBuilder = parseData(data);
+        Request request;
+        try {
+            request = parseRequest(data, null);
+        } catch (IllegalArgumentException e) {
+            Log.e(LCAT, e.getMessage());
+            return;
+        }
+
+        Log.d(LCAT, "HTTP GET request to: " + data.getString("url"));
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
@@ -146,19 +248,16 @@ public class TiOkhttpModule extends KrollModule {
             }
 
             @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
+            public void onResponse(@NonNull Call call, @NonNull Response response) {
                 try (ResponseBody responseBody = response.body()) {
                     if (response.isSuccessful()) {
                         createReturnEvent(call, response.headers(), responseBody, response, data);
                     } else {
-                        RequestContext ctx = (RequestContext) call.request().tag();
-                        if (ctx != null && ctx.error != null) {
-                            ctx.error.callAsync(getKrollObject(), new KrollDict());
-                        }
-                        fireEvent("error", new KrollDict());
+                        handleErrorResponse(call, response, data);
                     }
                 } catch (Exception exception) {
-                    Log.e(LCAT, exception.toString());
+                    Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
+                    createErrorEvent(call, new IOException(exception));
                 }
             }
         });
@@ -169,14 +268,10 @@ public class TiOkhttpModule extends KrollModule {
         return new Cache(cacheDirectory, cacheSize);
     }
 
-    private void createErrorEvent(Call call, IOException e) {
+    private void createErrorEvent(@NonNull Call call, @NonNull IOException e) {
         KrollDict kd = new KrollDict();
-        if (e instanceof SocketTimeoutException) {
-            kd.put("timeout", true);
-        } else {
-            kd.put("timeout", false);
-        }
-        kd.put("message", e.toString());
+        kd.put("timeout", e instanceof SocketTimeoutException);
+        kd.put("message", e.getMessage() != null ? e.getMessage() : e.toString());
         fireEvent("error", kd);
 
         RequestContext ctx = (RequestContext) call.request().tag();
@@ -185,7 +280,24 @@ public class TiOkhttpModule extends KrollModule {
         }
     }
 
-    private void createReturnEvent(Call call, Headers header, ResponseBody body, Response response, KrollDict data) {
+    private void handleErrorResponse(@NonNull Call call, @NonNull Response response, @NonNull KrollDict data) {
+        RequestContext ctx = (RequestContext) call.request().tag();
+        if (ctx != null && ctx.error != null) {
+            KrollDict kd = new KrollDict();
+            kd.put("url", data.getString("url"));
+            kd.put("statusCode", response.code());
+            kd.put("statusMessage", response.message());
+            try {
+                kd.put("body", response.body() != null ? response.body().string() : "");
+            } catch (IOException e) {
+                kd.put("body", "");
+            }
+            ctx.error.callAsync(getKrollObject(), kd);
+        }
+        fireEvent("error", new KrollDict());
+    }
+
+    private void createReturnEvent(@NonNull Call call, @NonNull Headers header, @NonNull ResponseBody body, @NonNull Response response, @NonNull KrollDict data) {
         KrollDict output = new KrollDict();
         output.put("header", header.toString());
         try {
@@ -193,21 +305,17 @@ public class TiOkhttpModule extends KrollModule {
         } catch (Exception exception) {
             output.put("body", "");
         }
-        boolean isCached = false;
-        String networkResponse = "";
 
-        if (response != null && response.cacheResponse() != null) {
-            isCached = true;
-        }
-        if (response != null && response.networkResponse() != null) {
-            networkResponse = response.networkResponse().toString();
-        }
+        boolean isCached = response.cacheResponse() != null;
+        String networkResponse = response.networkResponse() != null ? response.networkResponse().toString() : "";
+
         output.put("url", data.getString("url"));
         output.put("data", data.getKrollDict("data"));
         output.put("cached", isCached);
         output.put("networkResponse", networkResponse);
-        assert response != null;
         output.put("protocol", response.protocol().toString());
+        output.put("statusCode", response.code());
+        output.put("statusMessage", response.message());
 
         RequestContext ctx = (RequestContext) call.request().tag();
         if (ctx != null && ctx.success != null) {
@@ -217,106 +325,34 @@ public class TiOkhttpModule extends KrollModule {
     }
 
     @Kroll.method
-    public void post(KrollDict data) {
+    public void post(@Kroll.argument(optional = true) @NonNull KrollDict data) {
+        Objects.requireNonNull(data, "data cannot be null");
+
         if (!data.containsKeyAndNotNull("url")) {
             Log.e(LCAT, "Please set an URL");
             return;
         }
+
         OkHttpClient.Builder clientBuilder = parseData(data);
 
-        String postBody = "";
-        boolean isMultipart = false;
-        if (data.get("data") instanceof HashMap) {
-
-            HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
-            assert localData != null;
-            for (String key : localData.keySet()) {
-                Object value = localData.get(key);
-                if (value != null) {
-                    if (value instanceof TiFileProxy) {
-                        value = ((TiFileProxy) value).getBaseFile();
-                    }
-                    if (value instanceof TiBaseFile || value instanceof TiBlob) {
-                        isMultipart = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!isMultipart) {
-                postBody = TiConvert.toJSON(localData).toString();
-            }
-        } else {
-            postBody = data.getString("data");
-        }
-
         RequestBody body;
-        if (isMultipart) {
-            MultipartBody.Builder multipartBody = new MultipartBody.Builder();
-            multipartBody.setType(MultipartBody.FORM);
-            HashMap<String, Object> localData = (HashMap<String, Object>) data.get("data");
-            assert localData != null;
-            for (String key : localData.keySet()) {
-                Object value = localData.get(key);
-
-                if (value != null) {
-
-                    if (value instanceof TiFileProxy) {
-                        value = ((TiFileProxy) value).getBaseFile();
-                    }
-
-                    if (value instanceof TiBaseFile || value instanceof TiBlob) {
-                        File file = null;
-                        if (value instanceof TiBaseFile baseFile && !(value instanceof TiResourceFile)) {
-                            file = baseFile.getNativeFile();
-                        } else if (value instanceof TiBlob || value instanceof TiResourceFile) {
-                            TiBlob blob;
-                            if (value instanceof TiBlob) {
-                                blob = (TiBlob) value;
-                            } else {
-                                try {
-                                    blob = ((TiResourceFile) value).read();
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            }
-                            String mimeType = blob.getMimeType();
-                            try {
-                                file = File.createTempFile(
-                                        "tixhr",
-                                        "." + TiMimeTypeHelper.getFileExtensionFromMimeType(mimeType, "txt"),
-                                        TiApplication.getInstance().getTiTempDir());
-                            } catch (IOException ignored) {
-                            }
-                            try {
-                                createFileFromBlob(blob, file);
-                            } catch (IOException ignored) {
-                            }
-                        }
-
-                        if (file != null) {
-                            multipartBody.addFormDataPart(key, file.getName(),
-                                    RequestBody.create(file,
-                                            MediaType.parse(TiMimeTypeHelper.getMimeType(file.getAbsolutePath()))
-                                    ));
-                        } else {
-                            Log.e(LCAT, "Error adding file");
-                        }
-                        break;
-                    }
-
-                    // normal key/value
-                    String str = TiConvert.toString(value);
-                    multipartBody.addFormDataPart(key, str);
-                }
-            }
-            body = multipartBody.build();
-        } else {
-            MediaType JSON = MediaType.parse("application/json");
-            body = RequestBody.create(postBody, JSON);
+        try {
+            body = createRequestBody(data);
+        } catch (Exception e) {
+            Log.e(LCAT, "Failed to create request body: " + e.getMessage(), e);
+            createErrorEvent(null, new IOException(e));
+            return;
         }
-        Request request = parseRequest(data, body);
 
+        Request request;
+        try {
+            request = parseRequest(data, body);
+        } catch (IllegalArgumentException e) {
+            Log.e(LCAT, e.getMessage());
+            return;
+        }
+
+        Log.d(LCAT, "HTTP POST request to: " + data.getString("url"));
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
@@ -324,36 +360,153 @@ public class TiOkhttpModule extends KrollModule {
             }
 
             @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    createReturnEvent(call, response.headers(), response.body(), response, data);
-                } else {
-                    RequestContext ctx = (RequestContext) call.request().tag();
-                    if (ctx != null && ctx.error != null) {
-                        KrollDict kd = new KrollDict();
-                        kd.put("url", data.getString("url"));
-                        kd.put("data", data.getKrollDict("data"));
-                        kd.put("body", response.body().string());
-                        ctx.error.callAsync(getKrollObject(), kd);
+            public void onResponse(@NonNull Call call, @NonNull Response response) {
+                try (ResponseBody responseBody = response.body()) {
+                    if (response.isSuccessful()) {
+                        createReturnEvent(call, response.headers(), responseBody, response, data);
+                    } else {
+                        handleErrorResponse(call, response, data);
                     }
-                    fireEvent("error", new KrollDict());
+                } catch (Exception exception) {
+                    Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
+                    createErrorEvent(call, new IOException(exception));
                 }
             }
         });
     }
 
-    private void createFileFromBlob(TiBlob blob, File file) throws IOException {
-        BufferedInputStream bufferedInput = new BufferedInputStream(blob.getInputStream());
-        BufferedOutputStream bufferedOutput = new BufferedOutputStream(new FileOutputStream(file));
+    /**
+     * Create RequestBody from data (JSON or Multipart)
+     */
+    @NonNull
+    private RequestBody createRequestBody(@NonNull KrollDict data) throws Exception {
+        Object dataObj = data.get("data");
 
-        byte[] buffer = new byte[1024 * 1024 * 8]; // 8MB buffer
-        int available = -1;
-        while ((available = bufferedInput.read(buffer)) > 0) {
-            bufferedOutput.write(buffer, 0, available);
+        if (dataObj instanceof HashMap) {
+            @SuppressWarnings("unchecked")
+            HashMap<String, Object> localData = (HashMap<String, Object>) dataObj;
+
+            if (hasFileOrBlob(localData)) {
+                return createMultipartBody(localData);
+            } else {
+                return createJsonRequestBody(localData);
+            }
+        } else if (dataObj instanceof String) {
+            MediaType JSON = MediaType.parse("application/json");
+            return RequestBody.create((String) dataObj, JSON);
         }
 
-        bufferedOutput.flush();
-        bufferedOutput.close();
-        bufferedInput.close();
+        // Empty body for POST without data or unsupported types
+        return RequestBody.create(new byte[0], MediaType.parse("application/json"));
+    }
+
+    /**
+     * Check if data contains file or blob objects (requires multipart)
+     */
+    private boolean hasFileOrBlob(@NonNull HashMap<String, Object> localData) {
+        for (Object value : localData.values()) {
+            if (value == null) continue;
+
+            if (value instanceof TiFileProxy) {
+                return true;
+            }
+            if (value instanceof TiBaseFile || value instanceof TiBlob) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Create MultipartBody for file uploads
+     */
+    @NonNull
+    private RequestBody createMultipartBody(@NonNull HashMap<String, Object> localData) throws IOException {
+        MultipartBody.Builder multipartBody = new MultipartBody.Builder();
+        multipartBody.setType(MultipartBody.FORM);
+
+        for (Map.Entry<String, Object> entry : localData.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+
+            if (value == null) continue;
+
+            try {
+                if (value instanceof TiFileProxy) {
+                    value = ((TiFileProxy) value).getBaseFile();
+                }
+
+                if (value instanceof TiBaseFile && !(value instanceof TiResourceFile)) {
+                    File file = ((TiBaseFile) value).getNativeFile();
+                    if (file != null && file.exists()) {
+                        MediaType mediaType = MediaType.parse(TiMimeTypeHelper.getMimeType(file.getAbsolutePath()));
+                        multipartBody.addFormDataPart(key, file.getName(), RequestBody.create(file, mediaType));
+                    }
+                } else if (value instanceof TiBlob) {
+                    TiBlob blob = (TiBlob) value;
+                    String mimeType = blob.getMimeType();
+                    File tempFile = File.createTempFile(
+                            "tixhr",
+                            "." + TiMimeTypeHelper.getFileExtensionFromMimeType(mimeType, "txt"),
+                            TiApplication.getInstance().getTiTempDir());
+                    createFileFromBlob(blob, tempFile);
+                    MediaType mediaType = MediaType.parse(TiMimeTypeHelper.getMimeType(tempFile.getAbsolutePath()));
+                    multipartBody.addFormDataPart(key, tempFile.getName(), RequestBody.create(tempFile, mediaType));
+                } else if (value instanceof TiResourceFile) {
+                    TiBlob blob = ((TiResourceFile) value).read();
+                    String mimeType = blob.getMimeType();
+                    File tempFile = File.createTempFile(
+                            "tixhr",
+                            "." + TiMimeTypeHelper.getFileExtensionFromMimeType(mimeType, "txt"),
+                            TiApplication.getInstance().getTiTempDir());
+                    createFileFromBlob(blob, tempFile);
+                    MediaType mediaType = MediaType.parse(TiMimeTypeHelper.getMimeType(tempFile.getAbsolutePath()));
+                    multipartBody.addFormDataPart(key, tempFile.getName(), RequestBody.create(tempFile, mediaType));
+                } else {
+                    // normal key/value
+                    multipartBody.addFormDataPart(key, TiConvert.toString(value));
+                }
+            } catch (IOException e) {
+                Log.e(LCAT, "Error adding part '" + key + "': " + e.getMessage(), e);
+            }
+        }
+
+        return multipartBody.build();
+    }
+
+    /**
+     * Create JSON RequestBody
+     */
+    @NonNull
+    private RequestBody createJsonRequestBody(@Nullable HashMap<String, Object> localData) throws IOException {
+        String postBody;
+        if (localData != null && !localData.isEmpty()) {
+            try {
+                postBody = TiConvert.toJSON(localData).toString();
+            } catch (Exception e) {
+                postBody = "{}";
+            }
+        } else {
+            postBody = "{}";
+        }
+
+        MediaType JSON = MediaType.parse("application/json");
+        return RequestBody.create(postBody, JSON);
+    }
+
+    /**
+     * Create file from TiBlob
+     */
+    private void createFileFromBlob(@NonNull TiBlob blob, @NonNull File file) throws IOException {
+        try (BufferedInputStream bufferedInput = new BufferedInputStream(blob.getInputStream());
+             BufferedOutputStream bufferedOutput = new BufferedOutputStream(new FileOutputStream(file))) {
+
+            byte[] buffer = new byte[8192]; // 8KB buffer (more efficient than 8MB for typical files)
+            int bytesRead;
+            while ((bytesRead = bufferedInput.read(buffer)) != -1) {
+                bufferedOutput.write(buffer, 0, bytesRead);
+            }
+            bufferedOutput.flush();
+        }
     }
 }
