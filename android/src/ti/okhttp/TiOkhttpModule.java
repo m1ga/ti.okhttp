@@ -102,7 +102,7 @@ public class TiOkhttpModule extends KrollModule {
     /**
      * Parse request headers and configuration from KrollDict
      */
-    private Request parseRequest(@Kroll.argument(optional = true) @NonNull KrollDict data, @Nullable RequestBody body) {
+    private Request parseRequest(@Kroll.argument(optional = true) @NonNull KrollDict data, @Nullable RequestBody body, String method) {
         Objects.requireNonNull(data, "data cannot be null");
 
         String url = data.getString("url");
@@ -157,7 +157,11 @@ public class TiOkhttpModule extends KrollModule {
         RequestContext ctx = new RequestContext(clbSuccess, clbError);
 
         if (body != null) {
-            requestBuilder.post(body);
+            if ("DELETE".equals(method)) {
+                requestBuilder.delete(body);
+            } else {
+                requestBuilder.post(body);
+            }
         }
 
         return requestBuilder.tag(ctx).build();
@@ -234,7 +238,7 @@ public class TiOkhttpModule extends KrollModule {
         OkHttpClient.Builder clientBuilder = parseData(data);
         Request request;
         try {
-            request = parseRequest(data, null);
+            request = parseRequest(data, null, "GET");
         } catch (IllegalArgumentException e) {
             Log.e(LCAT, e.getMessage());
             return;
@@ -346,13 +350,64 @@ public class TiOkhttpModule extends KrollModule {
 
         Request request;
         try {
-            request = parseRequest(data, body);
+            request = parseRequest(data, body, "POST");
         } catch (IllegalArgumentException e) {
             Log.e(LCAT, e.getMessage());
             return;
         }
 
         Log.d(LCAT, "HTTP POST request to: " + data.getString("url"));
+        clientBuilder.build().newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                createErrorEvent(call, e);
+            }
+
+            @Override
+            public void onResponse(@NonNull Call call, @NonNull Response response) {
+                try (ResponseBody responseBody = response.body()) {
+                    if (response.isSuccessful()) {
+                        createReturnEvent(call, response.headers(), responseBody, response, data);
+                    } else {
+                        handleErrorResponse(call, response, data);
+                    }
+                } catch (Exception exception) {
+                    Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
+                    createErrorEvent(call, new IOException(exception));
+                }
+            }
+        });
+    }
+
+    @Kroll.method
+    public void deleteRoute(@Kroll.argument(optional = true) @NonNull KrollDict data) {
+        Objects.requireNonNull(data, "data cannot be null");
+
+        if (!data.containsKeyAndNotNull("url")) {
+            Log.e(LCAT, "Please set an URL");
+            return;
+        }
+
+        OkHttpClient.Builder clientBuilder = parseData(data);
+
+        RequestBody body;
+        try {
+            body = createRequestBody(data);
+        } catch (Exception e) {
+            Log.e(LCAT, "Failed to create request body: " + e.getMessage(), e);
+            createErrorEvent(null, new IOException(e));
+            return;
+        }
+
+        Request request;
+        try {
+            request = parseRequest(data, body, "DELETE");
+        } catch (IllegalArgumentException e) {
+            Log.e(LCAT, e.getMessage());
+            return;
+        }
+
+        Log.d(LCAT, "HTTP DELETE request to: " + data.getString("url"));
         clientBuilder.build().newCall(request).enqueue(new Callback() {
             @Override
             public void onFailure(@NonNull Call call, @NonNull IOException e) {
