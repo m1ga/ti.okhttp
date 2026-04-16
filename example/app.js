@@ -60,8 +60,12 @@ const btnComparison = Ti.UI.createButton({
 	title: 'Compare with Ti.Network',
 	top: 10
 });
+const btnProgress = Ti.UI.createButton({
+	title: 'Progress Tracking',
+	top: 10
+});
 
-btnContainer.add([btnGet, btnPost, btnFile, btnTimeout, btnCache, btnConnectionPool, btnCallbacks, btnComparison]);
+btnContainer.add([btnGet, btnPost, btnFile, btnTimeout, btnCache, btnConnectionPool, btnCallbacks, btnComparison, btnProgress]);
 win.add(btnContainer);
 
 // Event Listeners
@@ -79,6 +83,20 @@ okhttp.addEventListener('error', function(e) {
 	console.log('=== ERROR EVENT ===');
 	console.log('Timeout:', e.timeout);
 	console.log('Message:', e.message);
+});
+
+okhttp.addEventListener('uploadProgress', function(e) {
+	console.log('=== UPLOAD PROGRESS ===');
+	console.log('URL:', e.url);
+	console.log('Progress:', e.progress + '%');
+	console.log('Transferred:', e.transferred, '/', e.total, 'bytes');
+});
+
+okhttp.addEventListener('downloadProgress', function(e) {
+	console.log('=== DOWNLOAD PROGRESS ===');
+	console.log('URL:', e.url);
+	console.log('Progress:', e.progress + '%');
+	console.log('Transferred:', e.transferred, '/', e.total, 'bytes');
 });
 
 // GET Request
@@ -182,6 +200,31 @@ btnCallbacks.addEventListener('click', function() {
 	});
 });
 
+// Progress Tracking
+btnProgress.addEventListener('click', function() {
+	const dialog = Ti.UI.createAlertDialog({
+		title: 'Progress Tracking',
+		message: 'Progress tracking shows real-time upload/download progress!\n\n' +
+			'Features:\n' +
+			'  • uploadProgress event for POST/PUT\n' +
+			'  • downloadProgress event for GET\n' +
+			'  • Percentage and byte counts\n' +
+			'  • Debounced at 100ms intervals\n\n' +
+			'Check the console for progress updates.',
+		buttons: [Ti.UI.Android.BUTTON_POSITIVE]
+	});
+	dialog.show();
+	
+	// Demo download with progress
+	okhttp.get({
+		url: 'https://httpbin.org/bytes/1000000',  // 1MB file
+		trackProgress: true,
+		header: {
+			'Accept': 'application/octet-stream'
+		}
+	});
+});
+
 // Comparison with Ti.Network
 btnComparison.addEventListener('click', function() {
 	const dialog = Ti.UI.createAlertDialog({
@@ -192,7 +235,8 @@ btnComparison.addEventListener('click', function() {
 			'  • Better caching\n' +
 			'  • File uploads (multipart)\n' +
 			'  • Configurable timeouts\n' +
-			'  • Event-driven API\n\n' +
+			'  • Event-driven API\n' +
+			'  • Progress tracking\n\n' +
 			'See README.md for details.',
 		buttons: [Ti.UI.Android.BUTTON_POSITIVE]
 	});
