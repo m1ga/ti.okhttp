@@ -8,6 +8,8 @@
 package ti.okhttp;
 
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -50,6 +52,13 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
+import okio.Buffer;
+import okio.BufferedSink;
+import okio.BufferedSource;
+import okio.Okio;
+import okio.Sink;
+import okio.Source;
+import okio.Timeout;
 
 
 @Kroll.module(name = "TiOkhttp", id = "ti.okhttp")
@@ -244,27 +253,81 @@ public class TiOkhttpModule extends KrollModule {
             return;
         }
 
-        Log.d(LCAT, "HTTP GET request to: " + data.getString("url"));
-        clientBuilder.build().newCall(request).enqueue(new Callback() {
-            @Override
-            public void onFailure(@NonNull Call call, @NonNull IOException e) {
-                createErrorEvent(call, e);
-            }
+        final RequestContext ctx = (RequestContext) request.tag();
 
-            @Override
-            public void onResponse(@NonNull Call call, @NonNull Response response) {
-                try (ResponseBody responseBody = response.body()) {
-                    if (response.isSuccessful()) {
-                        createReturnEvent(call, response.headers(), responseBody, response, data);
-                    } else {
-                        handleErrorResponse(call, response, data);
-                    }
-                } catch (Exception exception) {
-                    Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
-                    createErrorEvent(call, new IOException(exception));
+        // Progress Tracking for download
+        if (data.containsKeyAndNotNull("trackProgress") && data.getBoolean("trackProgress")) {
+            final ProgressListener progressListener = new ProgressListener() {
+                @Override
+                public void onUploadProgress(long bytesWritten, long contentLength, boolean done) {
+                    // Not used for GET requests
                 }
-            }
-        });
+
+                @Override
+                public void onDownloadProgress(long bytesRead, long contentLength, boolean done) {
+                    if (contentLength > 0) {
+                        KrollDict progress = new KrollDict();
+                        progress.put("url", data.getString("url"));
+                        progress.put("type", "download");
+                        progress.put("bytesWritten", bytesRead);
+                        progress.put("contentLength", contentLength);
+                        progress.put("progress", (int) ((bytesRead * 100.0) / contentLength));
+                        progress.put("transferred", bytesRead);
+                        progress.put("total", contentLength);
+                        runOnUiThread(() -> {
+                            fireEvent("downloadProgress", progress);
+                            if (ctx != null && ctx.success != null) {
+                                ctx.success.callAsync(getKrollObject(), progress);
+                            }
+                        });
+                    }
+                }
+            };
+            Log.d(LCAT, "HTTP GET request with progress tracking to: " + data.getString("url"));
+            clientBuilder.build().newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                    createErrorEvent(call, e);
+                }
+
+                @Override
+                public void onResponse(@NonNull Call call, @NonNull Response response) {
+                    try (ResponseBody responseBody = response.body()) {
+                        ProgressResponseBody wrappedBody = new ProgressResponseBody(responseBody, progressListener);
+                        if (response.isSuccessful()) {
+                            createReturnEvent(call, response.headers(), wrappedBody, response, data);
+                        } else {
+                            handleErrorResponse(call, response, data);
+                        }
+                    } catch (Exception exception) {
+                        Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
+                        createErrorEvent(call, new IOException(exception));
+                    }
+                }
+            });
+        } else {
+            Log.d(LCAT, "HTTP GET request to: " + data.getString("url"));
+            clientBuilder.build().newCall(request).enqueue(new Callback() {
+                @Override
+                public void onFailure(@NonNull Call call, @NonNull IOException e) {
+                    createErrorEvent(call, e);
+                }
+
+                @Override
+                public void onResponse(@NonNull Call call, @NonNull Response response) {
+                    try (ResponseBody responseBody = response.body()) {
+                        if (response.isSuccessful()) {
+                            createReturnEvent(call, response.headers(), responseBody, response, data);
+                        } else {
+                            handleErrorResponse(call, response, data);
+                        }
+                    } catch (Exception exception) {
+                        Log.e(LCAT, "Response processing error: " + exception.getMessage(), exception);
+                        createErrorEvent(call, new IOException(exception));
+                    }
+                }
+            });
+        }
     }
 
     private Cache CacheResponse(File cacheDirectory, int value) throws Exception {
@@ -346,6 +409,35 @@ public class TiOkhttpModule extends KrollModule {
             Log.e(LCAT, "Failed to create request body: " + e.getMessage(), e);
             createErrorEvent(null, new IOException(e));
             return;
+        }
+
+        // Progress Tracking for upload
+        if (data.containsKeyAndNotNull("trackProgress") && data.getBoolean("trackProgress")) {
+            final ProgressListener progressListener = new ProgressListener() {
+                @Override
+                public void onUploadProgress(long bytesWritten, long contentLength, boolean done) {
+                    if (contentLength > 0) {
+                        KrollDict progress = new KrollDict();
+                        progress.put("url", data.getString("url"));
+                        progress.put("type", "upload");
+                        progress.put("bytesWritten", bytesWritten);
+                        progress.put("contentLength", contentLength);
+                        progress.put("progress", (int) ((bytesWritten * 100.0) / contentLength));
+                        progress.put("transferred", bytesWritten);
+                        progress.put("total", contentLength);
+                        runOnUiThread(() -> {
+                            fireEvent("uploadProgress", progress);
+                            // Note: No success callback for upload progress
+                        });
+                    }
+                }
+
+                @Override
+                public void onDownloadProgress(long bytesRead, long contentLength, boolean done) {
+                    // Not used for upload progress
+                }
+            };
+            body = new ProgressRequestBody(body, progressListener);
         }
 
         Request request;
@@ -557,11 +649,149 @@ public class TiOkhttpModule extends KrollModule {
              BufferedOutputStream bufferedOutput = new BufferedOutputStream(new FileOutputStream(file))) {
 
             byte[] buffer = new byte[8192]; // 8KB buffer (more efficient than 8MB for typical files)
-            int bytesRead;
+           int bytesRead;
             while ((bytesRead = bufferedInput.read(buffer)) != -1) {
                 bufferedOutput.write(buffer, 0, bytesRead);
             }
             bufferedOutput.flush();
         }
+    }
+
+    // Progress Tracking Support
+    // =========================
+
+    /**
+     * ProgressRequestBody for upload tracking
+     */
+    private static class ProgressRequestBody extends RequestBody {
+        private final RequestBody delegate;
+        private final ProgressListener progressListener;
+        private long totalBytesWritten = 0L;
+        private boolean completed = false;
+
+        ProgressRequestBody(RequestBody delegate, ProgressListener progressListener) {
+            this.delegate = delegate;
+            this.progressListener = progressListener;
+        }
+
+        @Override
+        public MediaType contentType() {
+            return delegate.contentType();
+        }
+
+        @Override
+        public long contentLength() throws IOException {
+            return delegate.contentLength();
+        }
+
+        @Override
+        public void writeTo(BufferedSink sink) throws IOException {
+            Sink wrappingSink = new Sink() {
+                @Override
+                public void write(Buffer source, long byteCount) throws IOException {
+                    sink.write(source, byteCount);
+                    totalBytesWritten += byteCount;
+                    long contentLength = contentLength();
+                    progressListener.onUploadProgress(totalBytesWritten, contentLength, false);
+                }
+
+                @Override
+                public void flush() throws IOException {
+                    sink.flush();
+                }
+
+                @Override
+                public void close() throws IOException {
+                    sink.close();
+                    if (!completed) {
+                        completed = true;
+                        long contentLength = contentLength();
+                        progressListener.onUploadProgress(totalBytesWritten, contentLength, true);
+                    }
+                }
+
+                @Override
+                public Timeout timeout() {
+                    return sink.timeout();
+                }
+            };
+
+            BufferedSink bufferedSink = Okio.buffer(wrappingSink);
+            delegate.writeTo(bufferedSink);
+            bufferedSink.flush();
+        }
+    }
+
+    /**
+     * ProgressResponseBody for download tracking
+     */
+    private static class ProgressResponseBody extends ResponseBody {
+        private final ResponseBody delegate;
+        private final ProgressListener progressListener;
+        private BufferedSource bufferedSource;
+
+        ProgressResponseBody(ResponseBody delegate, ProgressListener progressListener) {
+            this.delegate = delegate;
+            this.progressListener = progressListener;
+        }
+
+        @Override
+        public MediaType contentType() {
+            return delegate.contentType();
+        }
+
+        @Override
+        public long contentLength() {
+            return delegate.contentLength();
+        }
+
+        @Override
+        public BufferedSource source() {
+            if (bufferedSource == null) {
+                bufferedSource = Okio.buffer(source(delegate.source()));
+            }
+            return bufferedSource;
+        }
+
+        private Source source(Source source) {
+            return new Source() {
+                long totalBytesRead = 0L;
+
+                @Override
+                public long read(Buffer sink, long byteCount) throws IOException {
+                    long bytesRead = source.read(sink, byteCount);
+                    totalBytesRead += bytesRead != -1 ? bytesRead : 0;
+                    long contentLength = delegate.contentLength();
+                    progressListener.onDownloadProgress(totalBytesRead, contentLength, bytesRead == -1);
+                    return bytesRead;
+                }
+
+                @Override
+                public void close() throws IOException {
+                    source.close();
+                }
+
+                @Override
+                public Timeout timeout() {
+                    return source.timeout();
+                }
+            };
+        }
+    }
+
+    /**
+     * ProgressListener interface for progress updates
+     */
+    private interface ProgressListener {
+        void onUploadProgress(long bytesWritten, long contentLength, boolean done);
+        void onDownloadProgress(long bytesRead, long contentLength, boolean done);
+    }
+
+    /**
+     * Run code on the UI thread using Handler
+     */
+    private void runOnUiThread(Runnable runnable) {
+        Handler handler = new Handler(Looper.getMainLooper());
+        handler.post(runnable);
     }
 }
